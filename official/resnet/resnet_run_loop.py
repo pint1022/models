@@ -250,6 +250,12 @@ def resnet_model_fn(features, labels, mode, model_class,
 
   if mode == tf.estimator.ModeKeys.PREDICT:
     # Return the predictions and the specification for serving a SavedModel
+    predicted_classes = tf.argmax(logits, 1)
+    predictions = {
+        'class_ids': predicted_classes[:, tf.newaxis],
+        'classes': tf.argmax(logits, axis=1),
+        'probabilities': tf.nn.softmax(logits, name='softmax_tensor')
+    }
     return tf.estimator.EstimatorSpec(
         mode=mode,
         predictions=predictions,
@@ -445,6 +451,17 @@ def resnet_main(
             flags_obj.batch_size, flags_core.get_num_gpus(flags_obj)),
         num_epochs=1)
 
+  def _metric_fn(labels, predictions):
+        metrics = {}
+        pred_class = predictions['class_ids']
+        metrics['micro_accuracy'] = tf.metrics.mean_per_class_accuracy(
+            labels=labels, predictions=pred_class, num_classes=NUM_CLASSES
+        )
+        
+  trainer = tf.contrib.estimator.add_metrics(
+        estimator=classifier, metric_fn=_metric_fn)
+        
+        
   if flags_obj.eval_only or not flags_obj.train_epochs:
     # If --eval_only is set, perform a single loop with zero train epochs.
     schedule, n_loops = [0], 1
@@ -465,7 +482,7 @@ def resnet_main(
     tf.logging.info('Starting cycle: %d/%d', cycle_index, int(n_loops))
 
     if num_train_epochs:
-      classifier.train(input_fn=lambda: input_fn_train(num_train_epochs),
+      trainer.train(input_fn=lambda: input_fn_train(num_train_epochs),
                        hooks=train_hooks, max_steps=flags_obj.max_train_steps)
 
     tf.logging.info('Starting to evaluate.')
@@ -490,6 +507,8 @@ def resnet_main(
     input_receiver_fn = export.build_tensor_serving_input_receiver_fn(
         shape, batch_size=flags_obj.batch_size)
     classifier.export_savedmodel(flags_obj.export_dir, input_receiver_fn)
+
+  return classifier
 
 
 def define_resnet_flags(resnet_size_choices=None):
